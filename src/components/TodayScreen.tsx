@@ -1176,8 +1176,6 @@ export default function TodayScreen({
     };
   };
 
-  const mascotState = getMascotState();
-
   const dayTodos = todos
     .filter(t => t.dateStr === dateStr)
     .sort((a, b) => {
@@ -1186,6 +1184,8 @@ export default function TodayScreen({
       if (!b.timeStr) return -1;
       return a.timeStr.localeCompare(b.timeStr);
     });
+
+  const mascotState = getMascotState();
 
   return (
     <motion.div

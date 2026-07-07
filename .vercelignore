@@ -1,0 +1,9 @@
+.env
+.env.local
+.env.*.local
+.agents
+.codex
+dist
+node_modules
+firebase-applet-config.json
+firebase-blueprint.json
