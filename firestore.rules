@@ -1,0 +1,23 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Function to validate Sync IDs (must be alphanumeric and a reasonable size)
+    function isValidSyncId(syncId) {
+      return syncId is string && syncId.size() >= 5 && syncId.size() <= 40;
+    }
+
+    // Function to validate Dates (YYYY-MM-DD format)
+    function isValidDate(dateStr) {
+      return dateStr is string && dateStr.size() == 10;
+    }
+
+    match /syncProfiles/{syncId} {
+      allow read, write: if isValidSyncId(syncId);
+    }
+
+    match /syncProfiles/{syncId}/{document=**} {
+      allow read, write: if isValidSyncId(syncId);
+    }
+  }
+}

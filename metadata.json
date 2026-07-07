@@ -1,0 +1,6 @@
+{
+  "name": "年糕日记",
+  "description": "一款温暖治愈的卡通年糕主题健康追踪应用，支持记录每日卡路里摄入、体重称重趋势、饮水饮品、洗头周期及牙龈照片追踪，温暖陪伴你的自律每一天。",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

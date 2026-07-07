@@ -1,0 +1,61 @@
+{
+  "entities": {
+    "SyncProfile": {
+      "type": "object",
+      "properties": {
+        "syncId": { "type": "string" },
+        "settings": {
+          "type": "object",
+          "properties": {
+            "calorieBudget": { "type": "number" },
+            "waterGoalMl": { "type": "number" },
+            "weightKg": { "type": "number" },
+            "hairWashIntervalDays": { "type": "number" }
+          },
+          "required": ["calorieBudget", "waterGoalMl", "weightKg", "hairWashIntervalDays"]
+        },
+        "hairLast": { "type": "string" },
+        "gumDatesIndex": { "type": "array", "items": { "type": "string" } },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["syncId", "settings", "updatedAt"]
+    },
+    "DayLog": {
+      "type": "object",
+      "properties": {
+        "dateStr": { "type": "string" },
+        "waterMl": { "type": "number" },
+        "weightKg": { "type": "number" },
+        "food": { "type": "array" },
+        "exercise": { "type": "array" },
+        "waterLogs": { "type": "array" },
+        "beverages": { "type": "array" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["dateStr", "waterMl"]
+    },
+    "GumPhoto": {
+      "type": "object",
+      "properties": {
+        "dateStr": { "type": "string" },
+        "photoBase64": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["dateStr", "photoBase64"]
+    }
+  },
+  "firestore": {
+    "/syncProfiles/{syncId}": {
+      "schema": "SyncProfile",
+      "description": "User sync profile holding settings and index data"
+    },
+    "/syncProfiles/{syncId}/dayLogs/{dateStr}": {
+      "schema": "DayLog",
+      "description": "Daily food, water, weight, exercise logs"
+    },
+    "/syncProfiles/{syncId}/gumPhotos/{dateStr}": {
+      "schema": "GumPhoto",
+      "description": "Gum photo for a specific date in base64"
+    }
+  }
+}
