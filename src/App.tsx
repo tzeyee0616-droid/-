@@ -18,8 +18,8 @@ import GumScreen from "./components/GumScreen";
 import ExerciseScreen from "./components/ExerciseScreen";
 import FoodScreen from "./components/FoodScreen";
 import SettingsScreen from "./components/SettingsScreen";
+import AuthScreen from "./components/AuthScreen";
 import { 
-  generateSyncId, 
   saveProfileToCloud, 
   loadProfileFromCloud, 
   saveDayLogToCloud, 
@@ -27,7 +27,8 @@ import {
   saveGumPhotoToCloud, 
   deleteGumPhotoFromCloud,
   loadGumPhotoFromCloud,
-  loadAllDayLogsFromCloud
+  loadAllDayLogsFromCloud,
+  supabase
 } from "./lib/supabase";
 
 // Constants
@@ -74,8 +75,15 @@ export default function App() {
   const [todos, setTodos] = useState<TodoItem[]>([]);
 
   // Sync States
-  const [syncId, setSyncId] = useState<string>("");
   const [isAutoSync, setIsAutoSync] = useState<boolean>(true);
+
+  // Auth States
+  const [session, setSession] = useState<any>(null);
+  const [isGuestMode, setIsGuestMode] = useState<boolean>(false);
+  const [loadingAuth, setLoadingAuth] = useState<boolean>(true);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  const syncId = session?.user?.id || "";
 
   // UI Toast
   const [toastMsg, setToastMsg] = useState("");
@@ -118,10 +126,6 @@ export default function App() {
       setGumDatesIndex([]);
     }
 
-    // Load Sync Settings
-    const storedSyncId = localStorage.getItem(`${STORAGE_PREFIX}sync-id`);
-    if (storedSyncId) setSyncId(storedSyncId);
-
     const storedAutoSync = localStorage.getItem(`${STORAGE_PREFIX}auto-sync`);
     if (storedAutoSync !== null) {
       setIsAutoSync(storedAutoSync === "true");
@@ -137,6 +141,140 @@ export default function App() {
       }
     }
   }, []);
+
+  // Auth state listener & sync handlers
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) {
+        if (session.user.is_anonymous) {
+          setIsGuestMode(true);
+        } else {
+          setIsGuestMode(false);
+          handlePostLoginSync(session);
+        }
+      }
+      setLoadingAuth(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      if (newSession) {
+        if (newSession.user.is_anonymous) {
+          setIsGuestMode(true);
+        } else {
+          setIsGuestMode(false);
+          handlePostLoginSync(newSession);
+        }
+      } else {
+        setIsGuestMode(false);
+      }
+      setLoadingAuth(false);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handlePostLoginSync = async (userSession: any) => {
+    const userId = userSession.user.id;
+    try {
+      setSyncError(null);
+      const profile = await loadProfileFromCloud(userId);
+
+      if (profile) {
+        // Returning user - load profile
+        setSettings(profile.settings);
+        localStorage.setItem(`${STORAGE_PREFIX}settings`, JSON.stringify(profile.settings));
+
+        setHairLast(profile.hairLast);
+        if (profile.hairLast) {
+          localStorage.setItem(`${STORAGE_PREFIX}hairwash-last`, profile.hairLast);
+        } else {
+          localStorage.removeItem(`${STORAGE_PREFIX}hairwash-last`);
+        }
+
+        setGumDatesIndex(profile.gumDatesIndex || []);
+        localStorage.setItem(`${STORAGE_PREFIX}gum-index`, JSON.stringify(profile.gumDatesIndex || []));
+
+        setTodos(profile.todos || []);
+        localStorage.setItem(`${STORAGE_PREFIX}todo-list`, JSON.stringify(profile.todos || []));
+
+        // Load all day logs
+        const dayLogs = await loadAllDayLogsFromCloud(userId);
+
+        // Clear local day logs first
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith(`${STORAGE_PREFIX}day:`)) {
+            localStorage.removeItem(key);
+          }
+        }
+
+        // Save downloaded day logs to localStorage
+        Object.keys(dayLogs).forEach((dStr) => {
+          localStorage.setItem(`${STORAGE_PREFIX}day:${dStr}`, JSON.stringify(dayLogs[dStr]));
+        });
+
+        if (dayLogs[dateStr]) {
+          setDayLog(dayLogs[dateStr]);
+        } else {
+          setDayLog(DEFAULT_DAY_LOG);
+        }
+
+        // Clear local gum photos to free browser memory and fetch them dynamically
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith(`${STORAGE_PREFIX}gum-photo:`)) {
+            localStorage.removeItem(key);
+          }
+        }
+        setTodayGumPhoto(null);
+        showToast("已成功载入您的云端数据 ✨");
+      } else {
+        // New user - upload current local profile to cloud
+        await saveProfileToCloud(userId, {
+          settings,
+          hairLast,
+          gumDatesIndex,
+          todos,
+        });
+
+        // Upload any other local logs/photos to the cloud
+        await uploadAllLocalDataToCloud(userId);
+        showToast("已同步您的本地数据至云端 ✨");
+      }
+    } catch (e: any) {
+      console.error("Post-login sync error:", e);
+      setSyncError(`登录同步失败: ${e.message || String(e)}`);
+      showToast("数据同步失败，已恢复本地模式");
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+      setSettings(DEFAULT_SETTINGS);
+      setHairLast(null);
+      setDayLog(DEFAULT_DAY_LOG);
+      setGumDatesIndex([]);
+      setTodayGumPhoto(null);
+      setTodos([]);
+
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(STORAGE_PREFIX)) {
+          localStorage.removeItem(key);
+        }
+      }
+      setIsGuestMode(false);
+      showToast("已成功退出登录");
+    } catch (e) {
+      console.error("Logout error:", e);
+      showToast("退出登录失败");
+    }
+  };
 
   const [recentWeights, setRecentWeights] = useState<{ date: string; weight: number }[]>([]);
 
@@ -162,6 +300,7 @@ export default function App() {
 
   // 2. Load DayLog whenever dateStr changes
   useEffect(() => {
+    const userId = session?.user?.id;
     const rawDay = localStorage.getItem(`${STORAGE_PREFIX}day:${dateStr}`);
     if (rawDay) {
       try {
@@ -171,8 +310,8 @@ export default function App() {
       }
     } else {
       setDayLog(DEFAULT_DAY_LOG);
-      if (syncId) {
-        loadDayLogFromCloud(syncId, dateStr).then((cloudLog) => {
+      if (userId) {
+        loadDayLogFromCloud(userId, dateStr).then((cloudLog) => {
           if (cloudLog) {
             setDayLog({ ...DEFAULT_DAY_LOG, ...cloudLog });
             localStorage.setItem(`${STORAGE_PREFIX}day:${dateStr}`, JSON.stringify(cloudLog));
@@ -192,8 +331,8 @@ export default function App() {
       }
     } else {
       setTodayGumPhoto(null);
-      if (syncId) {
-        loadGumPhotoFromCloud(syncId, dateStr).then((photoData) => {
+      if (userId) {
+        loadGumPhotoFromCloud(userId, dateStr).then((photoData) => {
           if (photoData) {
             setTodayGumPhoto(photoData);
             localStorage.setItem(`${STORAGE_PREFIX}gum-photo:${dateStr}`, JSON.stringify(photoData));
@@ -204,14 +343,14 @@ export default function App() {
 
     // Load weight trend
     loadRecentWeights();
-  }, [dateStr, syncId]);
+  }, [dateStr, session]);
 
   // Save DayLog Helper
   const saveDayLog = (newLog: DayLog) => {
     setDayLog(newLog);
     localStorage.setItem(`${STORAGE_PREFIX}day:${dateStr}`, JSON.stringify(newLog));
-    if (syncId && isAutoSync) {
-      saveDayLogToCloud(syncId, dateStr, newLog).catch((e) => {
+    if (session && isAutoSync) {
+      saveDayLogToCloud(session.user.id, dateStr, newLog).catch((e) => {
         console.error("Auto sync daylog error:", e);
       });
     }
@@ -307,7 +446,7 @@ export default function App() {
     setHairLast(dateStr);
     localStorage.setItem(`${STORAGE_PREFIX}hairwash-last`, dateStr);
     showToast("已成功记录，头发清爽洁净 ✨");
-    saveProfile(settings, dateStr, gumDatesIndex);
+    saveProfile(settings, dateStr, gumDatesIndex, todos);
   };
 
   // Add Food Entry
@@ -369,11 +508,10 @@ export default function App() {
     updatedSettings = settings,
     updatedHair = hairLast,
     updatedIndex = gumDatesIndex,
-    updatedTodos = todos,
-    activeSyncId = syncId
+    updatedTodos = todos
   ) => {
-    if (activeSyncId && isAutoSync) {
-      saveProfileToCloud(activeSyncId, {
+    if (session && isAutoSync) {
+      saveProfileToCloud(session.user.id, {
         settings: updatedSettings,
         hairLast: updatedHair,
         gumDatesIndex: updatedIndex,
@@ -385,8 +523,8 @@ export default function App() {
   };
 
   // Upload all local data to cloud helper
-  const uploadAllLocalDataToCloud = async (activeSyncId: string) => {
-    await saveProfileToCloud(activeSyncId, {
+  const uploadAllLocalDataToCloud = async (userId: string) => {
+    await saveProfileToCloud(userId, {
       settings,
       hairLast,
       gumDatesIndex,
@@ -403,7 +541,7 @@ export default function App() {
           const raw = localStorage.getItem(key);
           if (raw) {
             const parsed = JSON.parse(raw);
-            await saveDayLogToCloud(activeSyncId, dStr, parsed);
+            await saveDayLogToCloud(userId, dStr, parsed);
           }
         } catch (e) {
           console.error("Failed to upload daylog key:", key, e);
@@ -414,7 +552,7 @@ export default function App() {
           const raw = localStorage.getItem(key);
           if (raw) {
             const parsed = JSON.parse(raw);
-            await saveGumPhotoToCloud(activeSyncId, dStr, parsed);
+            await saveGumPhotoToCloud(userId, dStr, parsed);
           }
         } catch (e) {
           console.error("Failed to upload gumphoto key:", key, e);
@@ -424,10 +562,10 @@ export default function App() {
   };
 
   // Download all data from cloud helper
-  const downloadAllDataFromCloud = async (activeSyncId: string) => {
-    const profile = await loadProfileFromCloud(activeSyncId);
+  const downloadAllDataFromCloud = async (userId: string) => {
+    const profile = await loadProfileFromCloud(userId);
     if (!profile) {
-      throw new Error("云端同步码对应的账号配置不存在");
+      throw new Error("云端对应的账号配置不存在");
     }
 
     setSettings(profile.settings);
@@ -446,7 +584,7 @@ export default function App() {
     setTodos(profile.todos || []);
     localStorage.setItem(`${STORAGE_PREFIX}todo-list`, JSON.stringify(profile.todos || []));
 
-    const dayLogs = await loadAllDayLogsFromCloud(activeSyncId);
+    const dayLogs = await loadAllDayLogsFromCloud(userId);
     
     // Clear local day logs
     for (let i = localStorage.length - 1; i >= 0; i--) {
@@ -479,33 +617,17 @@ export default function App() {
 
   // Settings sync props implementation
   const handleEnableSync = async (targetSyncId: string) => {
-    try {
-      await downloadAllDataFromCloud(targetSyncId);
-      setSyncId(targetSyncId);
-      localStorage.setItem(`${STORAGE_PREFIX}sync-id`, targetSyncId);
-      return { success: true, message: "" };
-    } catch (e: any) {
-      return { success: false, message: e.message || "拉取云端数据失败" };
-    }
+    return { success: false, message: "此模式已被弃用，系统已启用自动账号同步" };
   };
 
   const handleGenerateSync = async () => {
-    try {
-      const newSyncId = generateSyncId();
-      await uploadAllLocalDataToCloud(newSyncId);
-      setSyncId(newSyncId);
-      localStorage.setItem(`${STORAGE_PREFIX}sync-id`, newSyncId);
-      return { success: true, syncId: newSyncId };
-    } catch (e: any) {
-      console.error("Generate sync code failure:", e);
-      return { success: false, syncId: "", error: e?.message || String(e) };
-    }
+    return { success: false, syncId: "", error: "此模式已被弃用，系统已启用自动账号同步" };
   };
 
   const handleUploadToCloud = async () => {
-    if (!syncId) return { success: false, message: "尚未绑定同步码" };
+    if (!session) return { success: false, message: "尚未登录账号" };
     try {
-      await uploadAllLocalDataToCloud(syncId);
+      await uploadAllLocalDataToCloud(session.user.id);
       return { success: true, message: "" };
     } catch (e: any) {
       return { success: false, message: e.message || "上传失败" };
@@ -513,9 +635,9 @@ export default function App() {
   };
 
   const handleDownloadFromCloud = async () => {
-    if (!syncId) return { success: false, message: "尚未绑定同步码" };
+    if (!session) return { success: false, message: "尚未登录账号" };
     try {
-      await downloadAllDataFromCloud(syncId);
+      await downloadAllDataFromCloud(session.user.id);
       return { success: true, message: "" };
     } catch (e: any) {
       return { success: false, message: e.message || "下载并覆盖本地失败" };
@@ -523,8 +645,7 @@ export default function App() {
   };
 
   const handleDisableSync = () => {
-    setSyncId("");
-    localStorage.removeItem(`${STORAGE_PREFIX}sync-id`);
+    // No-op
   };
 
   const handleToggleAutoSync = (enabled: boolean) => {
@@ -582,8 +703,8 @@ export default function App() {
 
     // Sync profile and photo
     saveProfile(settings, hairLast, updatedIndex);
-    if (syncId && isAutoSync) {
-      saveGumPhotoToCloud(syncId, targetDate, photo).catch((e) => {
+    if (session && isAutoSync) {
+      saveGumPhotoToCloud(session.user.id, targetDate, photo).catch((e) => {
         console.error("Auto sync gum photo error:", e);
       });
     }
@@ -602,8 +723,8 @@ export default function App() {
     showToast("牙龈照片已成功删除");
 
     saveProfile(settings, hairLast, updatedIndex);
-    if (syncId && isAutoSync) {
-      deleteGumPhotoFromCloud(syncId, targetDate).catch((e) => {
+    if (session && isAutoSync) {
+      deleteGumPhotoFromCloud(session.user.id, targetDate).catch((e) => {
         console.error("Auto sync delete gum photo error:", e);
       });
     }
@@ -703,6 +824,41 @@ export default function App() {
     food: "饮食摄入",
     settings: "应用设置",
   };
+
+  if (loadingAuth) {
+    return (
+      <div className="min-h-screen bg-brand-bg flex flex-col justify-center items-center font-sans">
+        <motion.div
+          animate={{ scale: [1, 1.1, 1], rotate: [0, 5, -5, 0] }}
+          transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
+          className="text-5xl mb-4"
+        >
+          🧁
+        </motion.div>
+        <div className="text-sm font-semibold text-brand-ink animate-pulse">正在载入年糕日记...</div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <AuthScreen
+        onAuthSuccess={(newSession) => {
+          setSession(newSession);
+          if (newSession.user.is_anonymous) {
+            setIsGuestMode(true);
+          } else {
+            setIsGuestMode(false);
+            handlePostLoginSync(newSession);
+          }
+        }}
+        onContinueAsGuest={() => {
+          setIsGuestMode(true);
+          showToast("已启用本地游客模式");
+        }}
+      />
+    );
+  }
 
   return (
     <div id="app-viewport" className="min-h-screen bg-brand-bg flex flex-col antialiased selection:bg-brand-accent-soft selection:text-brand-accent pb-20">
@@ -825,14 +981,14 @@ export default function App() {
               onSaveSettings={handleSaveSettings}
               onImportBackup={handleImportBackup}
               onExportBackup={handleExportBackup}
-              syncId={syncId}
               isAutoSync={isAutoSync}
-              onEnableSync={handleEnableSync}
-              onGenerateSync={handleGenerateSync}
               onUploadToCloud={handleUploadToCloud}
               onDownloadFromCloud={handleDownloadFromCloud}
-              onDisableSync={handleDisableSync}
               onToggleAutoSync={handleToggleAutoSync}
+              session={session}
+              onLogout={handleLogout}
+              isGuestMode={isGuestMode}
+              syncError={syncError}
             />
           )}
         </AnimatePresence>

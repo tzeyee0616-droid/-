@@ -25,15 +25,31 @@ export async function ensureSupabaseSession(): Promise<void> {
   }
 }
 
-export function generateSyncId(): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const part1 = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
-  const part2 = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
-  return `NG-${part1}-${part2}`;
+export async function signUpWithEmail(email: string, password: string) {
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+  });
+  if (error) throw error;
+  return data;
 }
 
-export interface SyncProfileData {
-  syncId: string;
+export async function signInWithEmail(email: string, password: string) {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function signOutUser() {
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+}
+
+export interface UserProfileData {
+  userId: string;
   settings: Settings;
   hairLast: string | null;
   gumDatesIndex: string[];
@@ -41,29 +57,9 @@ export interface SyncProfileData {
   updatedAt: string;
 }
 
-async function joinSyncProfile(syncId: string): Promise<void> {
-  await ensureSupabaseSession();
-  const { error } = await supabase.from("sync_members").upsert(
-    {
-      sync_id: syncId,
-    },
-    { onConflict: "sync_id,user_id", ignoreDuplicates: true }
-  );
-  if (error) throw error;
-}
-
-async function tryJoinSyncProfile(syncId: string): Promise<boolean> {
-  try {
-    await joinSyncProfile(syncId);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function toProfileData(row: any): SyncProfileData {
+function toProfileData(userId: string, row: any): UserProfileData {
   return {
-    syncId: row.sync_id,
+    userId,
     settings: row.settings,
     hairLast: row.hair_last,
     gumDatesIndex: row.gum_dates_index || [],
@@ -72,73 +68,61 @@ function toProfileData(row: any): SyncProfileData {
   };
 }
 
-export async function testSupabaseConnection(): Promise<void> {
-  await ensureSupabaseSession();
-  const { error } = await supabase.from("sync_profiles").select("sync_id").limit(1);
-  if (error) throw error;
-}
-
 export async function saveProfileToCloud(
-  syncId: string,
-  data: Omit<SyncProfileData, "syncId" | "updatedAt">
+  userId: string,
+  data: Omit<UserProfileData, "userId" | "updatedAt">
 ): Promise<void> {
   await ensureSupabaseSession();
-  const alreadyJoined = await tryJoinSyncProfile(syncId);
-  const { error } = await supabase.from("sync_profiles").upsert(
+  const { error } = await supabase.from("profiles").upsert(
     {
-      sync_id: syncId,
+      user_id: userId,
       settings: data.settings,
       hair_last: data.hairLast,
       gum_dates_index: data.gumDatesIndex || [],
       todos: data.todos || [],
       updated_at: new Date().toISOString(),
     },
-    { onConflict: "sync_id" }
+    { onConflict: "user_id" }
   );
   if (error) throw error;
-  if (!alreadyJoined) await joinSyncProfile(syncId);
 }
 
-export async function loadProfileFromCloud(syncId: string): Promise<SyncProfileData | null> {
-  try {
-    await joinSyncProfile(syncId);
-  } catch {
-    return null;
-  }
-  const { data, error } = await supabase.from("sync_profiles").select("*").eq("sync_id", syncId).maybeSingle();
+export async function loadProfileFromCloud(userId: string): Promise<UserProfileData | null> {
+  await ensureSupabaseSession();
+  const { data, error } = await supabase.from("profiles").select("*").eq("user_id", userId).maybeSingle();
   if (error) throw error;
-  return data ? toProfileData(data) : null;
+  return data ? toProfileData(userId, data) : null;
 }
 
-export async function saveDayLogToCloud(syncId: string, dateStr: string, log: DayLog): Promise<void> {
-  await joinSyncProfile(syncId);
+export async function saveDayLogToCloud(userId: string, dateStr: string, log: DayLog): Promise<void> {
+  await ensureSupabaseSession();
   const { error } = await supabase.from("day_logs").upsert(
     {
-      sync_id: syncId,
+      user_id: userId,
       date_str: dateStr,
       log,
       updated_at: new Date().toISOString(),
     },
-    { onConflict: "sync_id,date_str" }
+    { onConflict: "user_id,date_str" }
   );
   if (error) throw error;
 }
 
-export async function loadDayLogFromCloud(syncId: string, dateStr: string): Promise<DayLog | null> {
-  await joinSyncProfile(syncId);
+export async function loadDayLogFromCloud(userId: string, dateStr: string): Promise<DayLog | null> {
+  await ensureSupabaseSession();
   const { data, error } = await supabase
     .from("day_logs")
     .select("log")
-    .eq("sync_id", syncId)
+    .eq("user_id", userId)
     .eq("date_str", dateStr)
     .maybeSingle();
   if (error) throw error;
   return data?.log || null;
 }
 
-export async function loadAllDayLogsFromCloud(syncId: string): Promise<Record<string, DayLog>> {
-  await joinSyncProfile(syncId);
-  const { data, error } = await supabase.from("day_logs").select("date_str, log").eq("sync_id", syncId);
+export async function loadAllDayLogsFromCloud(userId: string): Promise<Record<string, DayLog>> {
+  await ensureSupabaseSession();
+  const { data, error } = await supabase.from("day_logs").select("date_str, log").eq("user_id", userId);
   if (error) throw error;
 
   return (data || []).reduce<Record<string, DayLog>>((result, row) => {
@@ -147,35 +131,35 @@ export async function loadAllDayLogsFromCloud(syncId: string): Promise<Record<st
   }, {});
 }
 
-export async function saveGumPhotoToCloud(syncId: string, dateStr: string, photo: GumPhoto): Promise<void> {
-  await joinSyncProfile(syncId);
+export async function saveGumPhotoToCloud(userId: string, dateStr: string, photo: GumPhoto): Promise<void> {
+  await ensureSupabaseSession();
   const { error } = await supabase.from("gum_photos").upsert(
     {
-      sync_id: syncId,
+      user_id: userId,
       date_str: dateStr,
       image: photo.image,
       note: photo.note,
       updated_at: new Date().toISOString(),
     },
-    { onConflict: "sync_id,date_str" }
+    { onConflict: "user_id,date_str" }
   );
   if (error) throw error;
 }
 
-export async function loadGumPhotoFromCloud(syncId: string, dateStr: string): Promise<GumPhoto | null> {
-  await joinSyncProfile(syncId);
+export async function loadGumPhotoFromCloud(userId: string, dateStr: string): Promise<GumPhoto | null> {
+  await ensureSupabaseSession();
   const { data, error } = await supabase
     .from("gum_photos")
     .select("image, note")
-    .eq("sync_id", syncId)
+    .eq("user_id", userId)
     .eq("date_str", dateStr)
     .maybeSingle();
   if (error) throw error;
   return data ? { image: data.image, note: data.note || "" } : null;
 }
 
-export async function deleteGumPhotoFromCloud(syncId: string, dateStr: string): Promise<void> {
-  await joinSyncProfile(syncId);
-  const { error } = await supabase.from("gum_photos").delete().eq("sync_id", syncId).eq("date_str", dateStr);
+export async function deleteGumPhotoFromCloud(userId: string, dateStr: string): Promise<void> {
+  await ensureSupabaseSession();
+  const { error } = await supabase.from("gum_photos").delete().eq("user_id", userId).eq("date_str", dateStr);
   if (error) throw error;
 }
