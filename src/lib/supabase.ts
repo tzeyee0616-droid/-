@@ -47,9 +47,18 @@ async function joinSyncProfile(syncId: string): Promise<void> {
     {
       sync_id: syncId,
     },
-    { onConflict: "sync_id,user_id" }
+    { onConflict: "sync_id,user_id", ignoreDuplicates: true }
   );
   if (error) throw error;
+}
+
+async function tryJoinSyncProfile(syncId: string): Promise<boolean> {
+  try {
+    await joinSyncProfile(syncId);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function toProfileData(row: any): SyncProfileData {
@@ -74,6 +83,7 @@ export async function saveProfileToCloud(
   data: Omit<SyncProfileData, "syncId" | "updatedAt">
 ): Promise<void> {
   await ensureSupabaseSession();
+  const alreadyJoined = await tryJoinSyncProfile(syncId);
   const { error } = await supabase.from("sync_profiles").upsert(
     {
       sync_id: syncId,
@@ -86,7 +96,7 @@ export async function saveProfileToCloud(
     { onConflict: "sync_id" }
   );
   if (error) throw error;
-  await joinSyncProfile(syncId);
+  if (!alreadyJoined) await joinSyncProfile(syncId);
 }
 
 export async function loadProfileFromCloud(syncId: string): Promise<SyncProfileData | null> {
@@ -101,7 +111,7 @@ export async function loadProfileFromCloud(syncId: string): Promise<SyncProfileD
 }
 
 export async function saveDayLogToCloud(syncId: string, dateStr: string, log: DayLog): Promise<void> {
-  await ensureSupabaseSession();
+  await joinSyncProfile(syncId);
   const { error } = await supabase.from("day_logs").upsert(
     {
       sync_id: syncId,
@@ -115,7 +125,7 @@ export async function saveDayLogToCloud(syncId: string, dateStr: string, log: Da
 }
 
 export async function loadDayLogFromCloud(syncId: string, dateStr: string): Promise<DayLog | null> {
-  await ensureSupabaseSession();
+  await joinSyncProfile(syncId);
   const { data, error } = await supabase
     .from("day_logs")
     .select("log")
@@ -127,7 +137,7 @@ export async function loadDayLogFromCloud(syncId: string, dateStr: string): Prom
 }
 
 export async function loadAllDayLogsFromCloud(syncId: string): Promise<Record<string, DayLog>> {
-  await ensureSupabaseSession();
+  await joinSyncProfile(syncId);
   const { data, error } = await supabase.from("day_logs").select("date_str, log").eq("sync_id", syncId);
   if (error) throw error;
 
@@ -138,7 +148,7 @@ export async function loadAllDayLogsFromCloud(syncId: string): Promise<Record<st
 }
 
 export async function saveGumPhotoToCloud(syncId: string, dateStr: string, photo: GumPhoto): Promise<void> {
-  await ensureSupabaseSession();
+  await joinSyncProfile(syncId);
   const { error } = await supabase.from("gum_photos").upsert(
     {
       sync_id: syncId,
@@ -153,7 +163,7 @@ export async function saveGumPhotoToCloud(syncId: string, dateStr: string, photo
 }
 
 export async function loadGumPhotoFromCloud(syncId: string, dateStr: string): Promise<GumPhoto | null> {
-  await ensureSupabaseSession();
+  await joinSyncProfile(syncId);
   const { data, error } = await supabase
     .from("gum_photos")
     .select("image, note")
@@ -165,7 +175,7 @@ export async function loadGumPhotoFromCloud(syncId: string, dateStr: string): Pr
 }
 
 export async function deleteGumPhotoFromCloud(syncId: string, dateStr: string): Promise<void> {
-  await ensureSupabaseSession();
+  await joinSyncProfile(syncId);
   const { error } = await supabase.from("gum_photos").delete().eq("sync_id", syncId).eq("date_str", dateStr);
   if (error) throw error;
 }
